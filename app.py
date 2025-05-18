@@ -310,7 +310,7 @@ if generate_button:
                         st.error("Failed to synthesize audio with OpenAI TTS.")
 
 # --- Display Audio Player and Download Button ---
-if st.session_state.audio__file_path: # Check if path is set
+if st.session_state.audio_file_path: # Check if path is set
     try:
         if os.path.exists(st.session_state.audio_file_path):
             with open(st.session_state.audio_file_path, 'rb') as audio_f:
