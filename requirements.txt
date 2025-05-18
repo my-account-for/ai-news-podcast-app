@@ -1,4 +1,5 @@
 streamlit
 openai
+google-generativeai
 requests
 beautifulsoup4
