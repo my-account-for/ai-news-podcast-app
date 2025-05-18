@@ -3,46 +3,37 @@ import datetime
 import requests
 from bs4 import BeautifulSoup
 from openai import OpenAI # OpenAI Python library
-import os
+import os # For saving the audio file temporarily
+import json # For decoding potential JSON errors from NewsAPI
 
 # --- THIS MUST BE THE VERY FIRST STREAMLIT COMMAND ---
 st.set_page_config(page_title="AI News Podcast (OpenAI)", layout="wide")
 
 # --- Attempt to Initialize OpenAI Client and Store in Session State ---
-
-# We use @st.cache_resource to ensure the client is created only once
-# and persists across reruns, unless the API key changes.
 @st.cache_resource
 def get_openai_client():
-    """
-    Initializes and returns the OpenAI client if the API key is available.
-    Returns None if initialization fails or key is missing.
-    Manages 'openai_init_error' in session state.
-    """
-    st.session_state.pop('openai_init_error', None) # Clear previous error
+    st.session_state.pop('openai_init_error', None)
     api_key = st.secrets.get("OPENAI_API_KEY")
 
     if not api_key:
         st.session_state.openai_init_error = "OPENAI_API_KEY not found in Streamlit secrets. Please configure it."
-        print(st.session_state.openai_init_error) # Log to server
+        print(st.session_state.openai_init_error)
         return None
     
     try:
         client = OpenAI(api_key=api_key)
-        # Perform a minimal test call to verify the key and connectivity (optional but good)
-        # client.models.list() # This call will raise an AuthenticationError if the key is bad
+        # Optional: Test call to verify key. Comment out if causing issues or cost concerns.
+        # client.models.list() 
         print("OpenAI client object created successfully.")
         return client
     except Exception as e:
         error_message = f"Failed to initialize OpenAI client or verify API key: {type(e).__name__} - {e}"
         st.session_state.openai_init_error = error_message
-        print(error_message) # Log to server
+        print(error_message)
         return None
 
-# Get the client (or None if it failed)
 openai_client = get_openai_client()
 
-# Update session state based on whether the client was successfully obtained
 if openai_client:
     st.session_state.openai_initialized = True
 else:
@@ -55,18 +46,14 @@ NEWS_API_KEY = st.secrets.get("NEWS_API_KEY")
 st.title("🎙️ AI News Podcast Generator")
 st.caption("Powered by NewsAPI and OpenAI (GPT & TTS)")
 
-# Display initialization status prominently
 if st.session_state.get("openai_initialized", False):
     st.sidebar.success("OpenAI Client Connected & Ready.")
 else:
     st.sidebar.error("OpenAI Client NOT Initialized.")
-    # Display the specific error message if available from initialization
     if 'openai_init_error' in st.session_state:
-        st.error(f"Initialization Problem: {st.session_state.openai_init_error}")
+        st.error(f"OpenAI Initialization Problem: {st.session_state.openai_init_error}")
     else:
-        # This case should ideally be covered by openai_init_error now
         st.error("Problem during OpenAI client setup. Check logs and secrets.")
-
 
 # --- Session State for app data (script, audio path) ---
 if 'podcast_script' not in st.session_state:
@@ -75,40 +62,61 @@ if 'audio_file_path' not in st.session_state:
     st.session_state.audio_file_path = ""
 
 
-# --- News Fetching Functions (Same as before - ensure NEWS_API_KEY is handled) ---
+# --- News Fetching Functions ---
 NEWS_API_ENDPOINT = "https://newsapi.org/v2/everything"
-@st.cache_data(ttl=3600)
-def fetch_news_newsapi(topics, companies, num_articles=5):
-    # ... (your existing fetch_news_newsapi function using NEWS_API_KEY)
-    if not NEWS_API_KEY: # This check is important
+
+# MODIFIED fetch_news_newsapi FOR TESTING - IGNORES UI INPUTS
+@st.cache_data(ttl=3600) # Caching is fine for this test
+def fetch_news_newsapi(topics, companies, num_articles=5): # UI parameters are ignored by this test version
+    if not NEWS_API_KEY:
         st.error("News API key (NEWS_API_KEY) not configured in Streamlit secrets.")
-        return []
-    query_parts = []
-    if topics:
-        query_parts.append(f"({' OR '.join(topics)})")
-    if companies:
-        query_parts.append(f"({' OR '.join(companies)})")
-
-    if not query_parts:
-        st.warning("Please provide at least one topic or company.")
+        print("DEBUG: NEWS_API_KEY is MISSING in secrets")
         return []
 
-    query_string = " AND ".join(query_parts)
-    yesterday = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1)).strftime('%Y-%m-%dT%H:%M:%SZ')
+    print(f"DEBUG: Using NewsAPI Key starting with: {NEWS_API_KEY[:5] if NEWS_API_KEY else 'None (This should not happen if key check passed)'}")
+
+    # --- FORCED SIMPLE QUERY FOR TESTING ---
+    test_query = "world" # A very broad term. Try "apple" or "google" if "world" yields nothing.
+    
+    from_date = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1)).strftime('%Y-%m-%dT%H:%M:%SZ')
 
     params = {
-        'q': query_string,
+        'q': test_query,
         'apiKey': NEWS_API_KEY,
-        'from': yesterday,
-        'sortBy': 'relevancy',
+        'from': from_date,
         'language': 'en',
-        'pageSize': num_articles
+        'pageSize': 5
+        # You can also try the 'top-headlines' endpoint as a test if 'everything' is problematic
+        # NEWS_API_ENDPOINT = "https://newsapi.org/v2/top-headlines"
+        # params = {'country': 'us', 'apiKey': NEWS_API_KEY, 'pageSize': 5} 
     }
+    
+    print(f"DEBUG: Test NewsAPI Request URL: {NEWS_API_ENDPOINT}") # Will show /everything or /top-headlines if you change it
+    print(f"DEBUG: Test NewsAPI Request Params: {params}")
+    
     results = []
     try:
-        response = requests.get(NEWS_API_ENDPOINT, params=params, timeout=10)
-        response.raise_for_status()
-        articles = response.json().get('articles', [])
+        response = requests.get(NEWS_API_ENDPOINT, params=params, timeout=15)
+        print(f"DEBUG: Test NewsAPI Response Status Code: {response.status_code}")
+        print(f"DEBUG: Test NewsAPI Response Headers: {response.headers}")
+        # Try to print the full response text for detailed error messages from NewsAPI
+        # Be cautious if the response could be extremely large, but for error diagnosis it's helpful.
+        response_text = response.text
+        print(f"DEBUG: Test NewsAPI Response Text (first 1000 chars): {response_text[:1000]}")
+        
+        response.raise_for_status() # This will raise an error for 4xx or 5xx status codes
+        
+        data = response.json() # This line will fail if response_text is not valid JSON
+        articles = data.get('articles', [])
+        print(f"DEBUG: Number of articles received: {len(articles)}")
+
+        if not articles and data.get('status') == 'ok': # API call was ok, but no articles found
+            print(f"DEBUG: NewsAPI reported status OK but returned 0 articles for query '{test_query}'.")
+            print(f"DEBUG: Full JSON response from NewsAPI: {data}") # See totalResults, etc.
+        elif data.get('status') == 'error': # NewsAPI itself reported an error
+             print(f"DEBUG: NewsAPI reported an error. Code: {data.get('code')}, Message: {data.get('message')}")
+
+
         for article in articles:
             results.append({
                 'title': article['title'],
@@ -117,15 +125,26 @@ def fetch_news_newsapi(topics, companies, num_articles=5):
                 'source_name': article.get('source', {}).get('name', 'Unknown Source'),
                 'published_at': article.get('publishedAt', '')
             })
-    except requests.exceptions.RequestException as e:
-        st.error(f"Error fetching news from NewsAPI: {e}")
+    except requests.exceptions.HTTPError as http_err:
+        st.error(f"HTTP error occurred with NewsAPI: {http_err}") # Error shown in UI
+        print(f"CRITICAL DEBUG: HTTP error occurred with NewsAPI: {http_err} - Response text was: {response_text}") # Logged
+    except requests.exceptions.RequestException as req_err:
+        st.error(f"Error during NewsAPI request: {req_err}")
+        print(f"CRITICAL DEBUG: Error during NewsAPI request: {req_err}")
+    except json.JSONDecodeError as json_err: # If response.text wasn't valid JSON
+        st.error(f"Error decoding JSON response from NewsAPI. Status: {response.status_code}.")
+        print(f"CRITICAL DEBUG: Error decoding JSON from NewsAPI: {json_err}. Response text was: {response_text}")
     except Exception as e:
-        st.error(f"An unexpected error occurred with NewsAPI: {e}")
+        st.error(f"An unexpected error occurred with NewsAPI: {type(e).__name__}")
+        print(f"CRITICAL DEBUG: An unexpected error occurred with NewsAPI: {type(e).__name__} - {e}")
+    
+    if not results:
+        print("DEBUG: fetch_news_newsapi is returning an empty list from the test query.")
     return results
+
 
 @st.cache_data(ttl=3600)
 def get_article_text(url):
-    # ... (your existing get_article_text function)
     try:
         response = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0 MyNewsPodcastApp/1.0'})
         response.raise_for_status()
@@ -148,15 +167,17 @@ def get_article_text(url):
         st.warning(f"Could not fetch/parse article {url}: {e}")
         return ""
 
-# --- OpenAI Script Generation (Pass the global openai_client) ---
+# --- OpenAI Script Generation ---
 def generate_podcast_script_openai(client_instance, news_items_for_script, topics, companies):
-    if not client_instance: # Check the passed client instance
+    if not client_instance:
         st.error("OpenAI client instance is not available for script generation.")
         return "Error: OpenAI client instance missing."
-    # ... (rest of your generate_podcast_script_openai function is the same)
+
     news_details_for_prompt = ""
-    if not news_items_for_script:
-        return "I couldn't find enough relevant news for your topics/companies to generate a script."
+    if not news_items_for_script: # Check if any items made it to this stage
+        st.warning("No news items provided to generate_podcast_script_openai. Script will be generic or fail.")
+        # Fallback: create a message indicating no specific news was processed
+        news_details_for_prompt = "No specific news articles were processed. Please generate a generic news intro and outro."
 
     for i, item in enumerate(news_items_for_script):
         news_details_for_prompt += f"\n--- News Item {i+1} ---\n"
@@ -172,13 +193,13 @@ The tone should be informative, professional, yet conversational and easy to lis
 The output script must be plain text suitable for Text-to-Speech. Do NOT use markdown (like **, ##, or lists).
 Use natural language and paragraph breaks for readability.
 Podcast Structure:
-1. Intro: A brief, friendly welcome.
-2. News Segments: Cover 2-4 distinct news items based on the provided content. For each:
+1. Intro: A brief, friendly welcome (e.g., 'Welcome to your AI-powered news brief! Here’s what’s trending...').
+2. News Segments: Cover 2-4 distinct news items based on the provided content. If no specific news items are provided, give a general news update or a placeholder message. For each news item:
    - Clearly state the headline or main point.
-   - Mention the source if available.
-   - Provide a succinct summary (2-4 sentences).
-   - Highlight a key takeaway.
-3. Outro: A brief closing.
+   - Mention the source if available (e.g., 'According to TechCrunch...').
+   - Provide a succinct summary (2-4 sentences) explaining the 'what' and 'why it matters'.
+   - Highlight a key takeaway or implication.
+3. Outro: A brief closing (e.g., 'That’s your news update for today. Stay informed and tune in next time!').
 """
     user_prompt = f"""
 Please generate a podcast script based on the following criteria and news items.
@@ -186,7 +207,7 @@ Primary Topics of Interest: {', '.join(topics) if topics else 'General Tech & Bu
 Companies to Focus On: {', '.join(companies) if companies else 'Focus on general relevance'}
 
 News items to summarize:
-{news_details_for_prompt}
+{news_details_for_prompt if news_details_for_prompt else "No specific news content was available to process. Please provide a generic, short news podcast greeting and sign-off."}
 
 Podcast Script:
 """
@@ -205,12 +226,11 @@ Podcast Script:
         st.error(f"Error generating script with OpenAI: {type(e).__name__} - {e}")
         return "Error generating podcast script."
 
-# --- OpenAI Text-to-Speech (Pass the global openai_client) ---
+# --- OpenAI Text-to-Speech ---
 def text_to_speech_openai(client_instance, text, output_filename="podcast_audio_openai.mp3", voice_model="alloy"):
-    if not client_instance: # Check the passed client instance
+    if not client_instance:
         st.error("OpenAI client instance is not available for TTS.")
         return None
-    # ... (rest of your text_to_speech_openai function is the same)
     if not text or "Error" in text or not text.strip():
         st.warning("No valid script content to synthesize into audio.")
         return None
@@ -236,14 +256,12 @@ with st.sidebar:
     raw_topics = st.text_area("Enter Topics (comma-separated)", default_topics, height=100, help="Keywords for news articles")
     raw_companies = st.text_area("Enter Companies (comma-separated)", default_companies, height=100, help="Specific company names")
     
-    num_articles_to_fetch = st.slider("Max news articles to fetch:", 3, 20, 7, help="How many articles NewsAPI should return.")
+    num_articles_to_fetch = st.slider("Max news articles to fetch (ignored in test mode):", 3, 20, 7, help="How many articles NewsAPI should return.")
     num_articles_for_script = st.slider("Max articles for script content:", 1, 5, 3, help="How many articles will be used for script.")
     
     openai_tts_voices = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"]
     selected_openai_voice = st.selectbox("Choose OpenAI TTS Voice:", openai_tts_voices, index=0, help="Select the voice for the podcast.")
 
-    # Disable button if OpenAI client isn't initialized
-    # Use the st.session_state.openai_initialized flag which is set based on get_openai_client() result
     generate_button = st.button("🚀 Generate Podcast", type="primary",
                                 disabled=not st.session_state.get("openai_initialized", False))
 
@@ -252,24 +270,23 @@ if generate_button:
     st.session_state.podcast_script = ""
     st.session_state.audio_file_path = ""
 
+    # UI inputs are technically read but ignored by the TEST version of fetch_news_newsapi
     user_topics = [t.strip() for t in raw_topics.split(',') if t.strip()]
     user_companies = [c.strip() for c in raw_companies.split(',') if c.strip()]
 
-    if not user_topics and not user_companies:
-        st.warning("Please enter at least one topic or company.")
-    elif not NEWS_API_KEY:
-        st.error("News API Key is not configured in Streamlit secrets.")
-    elif not openai_client: # Check the global client directly, which should reflect the cached result
+    if not NEWS_API_KEY: # Check if NewsAPI key is present before proceeding
+        st.error("News API Key is not configured in Streamlit secrets. Cannot fetch news.")
+    elif not openai_client: # Check the global client directly
         st.error("OpenAI client is not initialized. Cannot generate podcast. Check sidebar for error details.")
     else:
-        # ... (rest of your button logic, passing `openai_client` to your functions)
-        with st.spinner("Step 1/4: Fetching latest news... 📰"):
+        with st.spinner("Step 1/4: Fetching latest news (TEST MODE)... 📰"):
+            # The topics/companies from UI are passed but will be IGNORED by the test function
             news_items_fetched = fetch_news_newsapi(user_topics, user_companies, num_articles_to_fetch)
         
         if not news_items_fetched:
-            st.error("No news items found for your criteria.")
+            st.error("TEST MODE: No news items found using the hardcoded test query ('world'). Check NewsAPI key, plan, or logs for details.")
         else:
-            st.success(f"Found {len(news_items_fetched)} potentially relevant news articles.")
+            st.success(f"TEST MODE: Found {len(news_items_fetched)} news articles using hardcoded test query.")
             articles_to_use_in_script = news_items_fetched[:num_articles_for_script]
             processed_news_for_script_gen = []
 
@@ -283,14 +300,14 @@ if generate_button:
                     processed_news_for_script_gen.append(item)
                     progress_bar_articles.progress((i + 1) / len(articles_to_use_in_script))
             
-            if not processed_news_for_script_gen:
-                st.warning("Could not process any articles for the script.")
-                processed_news_for_script_gen = articles_to_use_in_script
+            if not processed_news_for_script_gen: # Should contain items even if full_text_content is missing
+                st.warning("No content could be extracted from fetched articles. Script will use titles/snippets.")
+                processed_news_for_script_gen = articles_to_use_in_script # Use items with at least title/snippet
             else:
                 st.success(f"Content processing complete for {len(processed_news_for_script_gen)} articles.")
 
             with st.spinner("Step 3/4: Generating podcast script with OpenAI... 🤖✍️"):
-                script = generate_podcast_script_openai(openai_client, processed_news_for_script_gen, user_topics, user_companies) # Pass client
+                script = generate_podcast_script_openai(openai_client, processed_news_for_script_gen, user_topics, user_companies)
                 st.session_state.podcast_script = script
 
             if "Error" in st.session_state.podcast_script or not st.session_state.podcast_script.strip():
@@ -301,7 +318,7 @@ if generate_button:
                 
                 with st.spinner("Step 4/4: Synthesizing audio with OpenAI TTS... 🔊"):
                     audio_output_filename = "podcast_output.mp3"
-                    audio_path = text_to_speech_openai(openai_client, st.session_state.podcast_script, audio_output_filename, voice_model=selected_openai_voice) # Pass client
+                    audio_path = text_to_speech_openai(openai_client, st.session_state.podcast_script, audio_output_filename, voice_model=selected_openai_voice)
                     
                     if audio_path and os.path.exists(audio_path):
                         st.session_state.audio_file_path = audio_path
@@ -310,7 +327,7 @@ if generate_button:
                         st.error("Failed to synthesize audio with OpenAI TTS.")
 
 # --- Display Audio Player and Download Button ---
-if st.session_state.audio_file_path: # Check if path is set
+if st.session_state.audio_file_path:
     try:
         if os.path.exists(st.session_state.audio_file_path):
             with open(st.session_state.audio_file_path, 'rb') as audio_f:
