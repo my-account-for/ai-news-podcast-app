@@ -1,6 +1,4 @@
 streamlit
-google-cloud-aiplatform
-google-cloud-texttospeech
+openai
 requests
 beautifulsoup4
-pydub
